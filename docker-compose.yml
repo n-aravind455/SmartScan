@@ -1,0 +1,98 @@
+version: "3.9"
+
+services:
+  # ── FastAPI Backend ──
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: smartscan-api
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - ./backend:/app
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ── Celery Worker ──
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: smartscan-worker
+    env_file: .env
+    volumes:
+      - ./backend:/app
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    command: celery -A app.worker.celery_app worker --loglevel=info --concurrency=2
+
+  # ── Redis (Broker + Result Backend) ──
+  redis:
+    image: redis:7-alpine
+    container_name: smartscan-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # ── PostgreSQL ──
+  postgres:
+    image: postgres:16-alpine
+    container_name: smartscan-postgres
+    ports:
+      - "5432:5432"
+    env_file: .env
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smartscan"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── MinIO Object Storage ──
+  minio:
+    image: minio/minio:latest
+    container_name: smartscan-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    env_file: .env
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+
+  # ── Next.js Frontend ──
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: smartscan-frontend
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      - BACKEND_URL=http://api:8000
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    depends_on:
+      - api
+
+volumes:
+  redis_data:
+  pg_data:
+  minio_data:

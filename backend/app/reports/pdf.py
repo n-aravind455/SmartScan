@@ -1,0 +1,264 @@
+"""Smart Scan — WeasyPrint PDF Report Generator."""
+
+import io
+import logging
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+REPORT_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Smart Scan Compliance Report</title>
+    <style>
+        @page {{
+            size: A4;
+            margin: 2cm;
+        }}
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'Segoe UI', Arial, sans-serif;
+            color: #1a1a2e;
+            line-height: 1.6;
+            font-size: 11pt;
+        }}
+        .header {{
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: white;
+            padding: 24px 32px;
+            border-radius: 8px;
+            margin-bottom: 24px;
+        }}
+        .header h1 {{ font-size: 22pt; margin-bottom: 4px; }}
+        .header .subtitle {{ opacity: 0.8; font-size: 10pt; }}
+        .badge {{
+            display: inline-block;
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 14pt;
+            margin: 16px 0;
+        }}
+        .badge-pass {{ background: #00c853; color: white; }}
+        .badge-fail {{ background: #ff1744; color: white; }}
+        .badge-warning {{ background: #ff9100; color: white; }}
+        .section {{
+            margin-bottom: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            overflow: hidden;
+        }}
+        .section-title {{
+            background: #f5f5f5;
+            padding: 10px 16px;
+            font-weight: 600;
+            font-size: 12pt;
+            border-bottom: 1px solid #e0e0e0;
+        }}
+        .section-body {{ padding: 16px; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        th, td {{
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+            font-size: 10pt;
+        }}
+        th {{ background: #fafafa; font-weight: 600; }}
+        .status-pass {{ color: #00c853; font-weight: bold; }}
+        .status-fail {{ color: #ff1744; font-weight: bold; }}
+        .status-warning {{ color: #ff9100; font-weight: bold; }}
+        .footer {{
+            margin-top: 32px;
+            padding-top: 16px;
+            border-top: 1px solid #ddd;
+            font-size: 9pt;
+            color: #888;
+            text-align: center;
+        }}
+        .meta-grid {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }}
+        .meta-item {{ font-size: 10pt; }}
+        .meta-label {{ color: #666; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔍 Smart Scan Compliance Report</h1>
+        <div class="subtitle">Legal Metrology (Packaged Commodities) Rules, 2011</div>
+    </div>
+
+    <div class="badge badge-{verdict_class}">{verdict}</div>
+
+    <div class="section">
+        <div class="section-title">📋 Scan Details</div>
+        <div class="section-body">
+            <div class="meta-grid">
+                <div class="meta-item"><span class="meta-label">Task ID:</span> {task_id}</div>
+                <div class="meta-item"><span class="meta-label">Filename:</span> {filename}</div>
+                <div class="meta-item"><span class="meta-label">Generated:</span> {timestamp}</div>
+                <div class="meta-item"><span class="meta-label">Checks Run:</span> {total_checks}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-title">📦 Extracted Product Information</div>
+        <div class="section-body">
+            <table>
+                <tr><th>Field</th><th>Value</th></tr>
+                {extracted_rows}
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <div class="section-title">✅ Compliance Checks</div>
+        <div class="section-body">
+            <table>
+                <tr><th>Check</th><th>Status</th><th>Details</th></tr>
+                {check_rows}
+            </table>
+        </div>
+    </div>
+
+    {reasoning_section}
+
+    {violations_section}
+
+    {warnings_section}
+
+    <div class="section">
+        <div class="section-title">📐 CV Analysis Summary</div>
+        <div class="section-body">
+            <div class="meta-grid">
+                <div class="meta-item"><span class="meta-label">Image Size:</span> {image_shape}</div>
+                <div class="meta-item"><span class="meta-label">Label Area:</span> {label_area} px²</div>
+                <div class="meta-item"><span class="meta-label">Text Regions:</span> {text_regions}</div>
+                <div class="meta-item"><span class="meta-label">Curvature Score:</span> {curvature_score}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        Generated by Smart Scan v1.0 — Cult Coders &bull; {timestamp}
+    </div>
+</body>
+</html>"""
+
+
+class ReportGenerator:
+    """Generates compliance PDF reports using WeasyPrint."""
+
+    def generate(
+        self,
+        task_id: str,
+        filename: str,
+        cv_results: dict,
+        extracted_text: dict,
+        compliance_result: dict,
+    ) -> bytes:
+        """
+        Generate a PDF compliance report.
+
+        Returns:
+            PDF file as bytes.
+        """
+        try:
+            from weasyprint import HTML
+        except ImportError:
+            logger.error("WeasyPrint not installed — returning empty PDF placeholder")
+            return b"%PDF-1.0 placeholder"
+
+        verdict = compliance_result.get("verdict", "UNKNOWN")
+        verdict_class = verdict.lower()
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S IST")
+
+        # Build extracted fields table
+        skip_keys = {"error", "raw", "_mock", "uncertain_fields"}
+        extracted_rows = ""
+        for key, value in extracted_text.items():
+            if key in skip_keys:
+                continue
+            label = key.replace("_", " ").title()
+            display_val = str(value) if value is not None else "—"
+            extracted_rows += f"<tr><td>{label}</td><td>{display_val}</td></tr>\n"
+
+        # Build check results table
+        check_rows = ""
+        for check in compliance_result.get("checks", []):
+            status = check["status"]
+            css_class = f"status-{status.lower()}"
+            check_rows += (
+                f'<tr><td>{check["description"]}</td>'
+                f'<td class="{css_class}">{status}</td>'
+                f'<td>{check.get("value") or "—"}</td></tr>\n'
+            )
+
+        # Violations section
+        violations = compliance_result.get("violations", [])
+        if violations:
+            items = "".join(f"<li>{v}</li>" for v in violations)
+            violations_section = f"""
+            <div class="section">
+                <div class="section-title">❌ Violations</div>
+                <div class="section-body"><ul>{items}</ul></div>
+            </div>"""
+        else:
+            violations_section = ""
+
+        # Warnings section
+        warnings = compliance_result.get("warnings", [])
+        if warnings:
+            items = "".join(f"<li>{w}</li>" for w in warnings)
+            warnings_section = f"""
+            <div class="section">
+                <div class="section-title">⚠️ Warnings</div>
+                <div class="section-body"><ul>{items}</ul></div>
+            </div>"""
+        else:
+            warnings_section = ""
+
+        # Gemini Custom Reasoning
+        gemini_reasoning = compliance_result.get("gemini_reasoning")
+        if gemini_reasoning:
+            reasoning_section = f"""
+            <div class="section" style="border-left: 4px solid #9c27b0;">
+                <div class="section-title">✨ AI Compliance Reason</div>
+                <div class="section-body"><p>{gemini_reasoning}</p></div>
+            </div>"""
+        else:
+            reasoning_section = ""
+
+        # CV summary
+        shape = cv_results.get("image_shape", [0, 0])
+        image_shape = f"{shape[1]}×{shape[0]}" if len(shape) >= 2 else "N/A"
+
+        html_content = REPORT_HTML_TEMPLATE.format(
+            task_id=task_id,
+            filename=filename,
+            timestamp=timestamp,
+            verdict=verdict,
+            verdict_class=verdict_class,
+            total_checks=compliance_result.get("total_checks", 0),
+            extracted_rows=extracted_rows,
+            check_rows=check_rows,
+            reasoning_section=reasoning_section,
+            violations_section=violations_section,
+            warnings_section=warnings_section,
+            image_shape=image_shape,
+            label_area=cv_results.get("label_area_px", 0),
+            text_regions=len(cv_results.get("font_metrics", [])),
+            curvature_score=cv_results.get("curvature_score", 0),
+        )
+
+        try:
+            pdf_bytes = HTML(string=html_content).write_pdf()
+        except Exception as e:
+            logger.error(f"WeasyPrint failed during PDF generation: {e}")
+            pdf_bytes = b"%PDF-1.0 WeasyPrint fallback placeholder"
+            
+        return pdf_bytes
