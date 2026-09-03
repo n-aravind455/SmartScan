@@ -51,12 +51,13 @@ export default function ScanPage() {
     }
   }, []);
 
-  // Attach stream to video element
-  useEffect(() => {
-    if (stream && videoRef.current) {
-      videoRef.current.srcObject = stream;
+  // Callback ref: attach stream immediately when the <video> mounts
+  const attachVideoRef = useCallback((node) => {
+    videoRef.current = node;
+    if (node && stream) {
+      node.srcObject = stream;
     }
-  }, [stream, phase]);
+  }, [stream]);
 
   // Cleanup stream on unmount
   useEffect(() => {
@@ -225,11 +226,11 @@ export default function ScanPage() {
               background: '#000',
             }}>
               <video
-                ref={videoRef}
+                ref={attachVideoRef}
                 autoPlay
                 playsInline
                 muted
-                style={{ width: '100%', display: 'block', maxHeight: '500px', objectFit: 'cover' }}
+                style={{ width: '100%', display: 'block', minHeight: '300px', maxHeight: '500px', objectFit: 'cover' }}
               />
 
               {/* Burst indicator */}

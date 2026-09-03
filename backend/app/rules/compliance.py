@@ -111,22 +111,24 @@ class ComplianceEngine:
             )
 
         # ── Determine overall verdict ──
-        # ── Determine overall verdict ──
+        # Priority: deterministic rule checks > Gemini AI verdict
         has_failures = any(c["status"] == "FAIL" for c in checks)
         has_warnings = len(warnings) > 0
         
         gemini_verdict = extracted_text.get("gemini_verdict")
         gemini_reasoning = extracted_text.get("gemini_compliance_reasoning")
 
-        if gemini_verdict in ["PASS", "FAIL", "WARNING"]:
-            verdict = gemini_verdict
+        # Deterministic checks take priority
+        if has_failures:
+            verdict = "FAIL"
+        elif has_warnings:
+            verdict = "WARNING"
+        elif gemini_verdict in ["FAIL", "WARNING"] and not has_failures:
+            # Gemini flagged an issue the rule engine didn't catch — escalate as WARNING
+            verdict = "WARNING"
+            warnings.append(f"Gemini AI flagged a concern: {gemini_reasoning}")
         else:
-            if has_failures:
-                verdict = "FAIL"
-            elif has_warnings:
-                verdict = "WARNING"
-            else:
-                verdict = "PASS"
+            verdict = "PASS"
 
         return {
             "verdict": verdict,
